@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
-#include <iostream>////////////////////////////////////////////////////////////////// Eventually create class/struct for resmatrix and its dimensions
+#include <iostream>
 
 // Maximum number of threads
 int MAXTHREADS = 4;
@@ -16,22 +16,38 @@ typedef std::vector<std::vector<int>> Matrix;
 
 
 // Result matrix
-struct ResultMatrix {
+class ResultMatrix {
+public:
+  // Matrix
   int** matrix;
+  // Priamry length
   int xlen;
+  // Secondary length
   int ylen;
+
+  // Provide pointers to get x/y len
+  ResultMatrix(Matrix* mat1, Matrix* mat2)
+  : xlen(mat1->size())
+  , ylen((*mat2)[0].size()) {
+    matrix = new int*[xlen];
+    for (int i=0; i<xlen; i++) {
+      matrix[i] = new int[ylen];
+    }
+  }
 };
 
 
 // Calculate a range of specified rows of result matrix
-void calculateRows(Matrix* mat1, Matrix* mat2, int** resmat, int iRange, int split) {
+void calculateRows(Matrix* mat1, Matrix* mat2, ResultMatrix* resmat, int iRange, int split) {
   // Set the top boundary of the loop to the next threads start boundary or to the end of the vec
-  int topRange = (iRange+split) < mat1->size() ? iRange+split : mat1->size();
+  int topRange = (iRange+split) < resmat->xlen ? iRange+split : resmat->xlen;
+  // Loop through all items in the specified part of matrix
   for (int i=iRange; i<topRange; i++) {
-    for (int j=0; j<(*mat2)[0].size(); j++) {
-      resmat[i][j] = 0;
+    for (int j=0; j<resmat->ylen; j++) {
+      resmat->matrix[i][j] = 0;
+      // Calculate one item in result matrix
       for (int rowcolptr=0; rowcolptr<(*mat1)[0].size(); rowcolptr++) {
-        resmat[i][j] += (*mat1)[i][rowcolptr] * (*mat2)[rowcolptr][j];
+        resmat->matrix[i][j] += (*mat1)[i][rowcolptr] * (*mat2)[rowcolptr][j];
       }
     }
   }
@@ -39,14 +55,16 @@ void calculateRows(Matrix* mat1, Matrix* mat2, int** resmat, int iRange, int spl
 
 
 // Calculate a range of specified cols of result matrix
-void calculateCols(Matrix* mat1, Matrix* mat2, int** resmat, int iRange, int split) {
+void calculateCols(Matrix* mat1, Matrix* mat2, ResultMatrix* resmat, int iRange, int split) {
   // Set the top boundary of the loop to the next threads start boundary or to the end of the vec
-  int topRange = (iRange+split) < (*mat2)[0].size() ? iRange+split : mat1->size();
+  int topRange = (iRange+split) < resmat->ylen ? iRange+split : resmat->xlen;
+  // Loop through all items in the specified part of matrix
   for (int j=iRange; j<topRange; j++) {
-    for (int i=0; i<mat1->size(); i++) {
-      resmat[i][j] = 0;
+    for (int i=0; i<resmat->xlen; i++) {
+      resmat->matrix[i][j] = 0;
+      // Calculate one item in result matrix
       for (int rowcolptr=0; rowcolptr<(*mat1)[0].size(); rowcolptr++) {
-        resmat[i][j] += (*mat1)[i][rowcolptr] * (*mat2)[rowcolptr][j];
+        resmat->matrix[i][j] += (*mat1)[i][rowcolptr] * (*mat2)[rowcolptr][j];
       }
     }
   }
@@ -54,36 +72,33 @@ void calculateCols(Matrix* mat1, Matrix* mat2, int** resmat, int iRange, int spl
 
 
 // Return a pointer to result of multiplication of two matrixes
-int** multiplyMatrixes (Matrix* mat1, Matrix* mat2) {
+ResultMatrix* multiplyMatrixes (Matrix* mat1, Matrix* mat2) {
   // Initialize the result matrix
-  int** resmat = new int*[mat1->size()];
-  for (int i=0; i<mat1->size(); i++) {
-    resmat[i] = new int[mat2[0].size()];
-  }
+  ResultMatrix* resmat = new ResultMatrix(mat1, mat2);
 
   // Vector of all threads
   std::vector<std::thread> threads;
 
   // We will use multithreading on rows/cols depending on what is bigger and therefore better to split into multiple threads
-  if (mat1->size() > (*mat2)[0].size()) {
+  if (resmat->xlen > resmat->ylen) {
     // If we can fit the input into MAXTHREADS
-    if (mat1->size() <= MAXTHREADS*SPLITTHREAD) {
-      for (int i=0; i<mat1->size(); i+=SPLITTHREAD) {
+    if (resmat->xlen <= MAXTHREADS*SPLITTHREAD) {
+      for (int i=0; i<resmat->xlen; i+=SPLITTHREAD) {
         threads.push_back(std::thread(calculateRows, mat1, mat2, resmat, i, SPLITTHREAD));
       }
     } else { // If we cannot we we will create max # of threads and each will have to handle more than SPLITTHREADS amount
       for (int i=0; i<MAXTHREADS; i++) {
-        threads.push_back(std::thread(calculateRows, mat1, mat2, resmat, i*(mat1->size()/MAXTHREADS), mat1->size()/MAXTHREADS));
+        threads.push_back(std::thread(calculateRows, mat1, mat2, resmat, i*(resmat->xlen/MAXTHREADS), resmat->xlen/MAXTHREADS));
       }
     }
   } else {
-    if ((*mat2)[0].size() <= MAXTHREADS*SPLITTHREAD) {
-      for (int j=0; j<(*mat2)[0].size(); j+=SPLITTHREAD) {
+    if (resmat->ylen <= MAXTHREADS*SPLITTHREAD) {
+      for (int j=0; j<resmat->ylen; j+=SPLITTHREAD) {
         threads.push_back(std::thread(calculateCols, mat1, mat2, resmat, j, SPLITTHREAD));
       }
     } else {
       for (int i=0; i<MAXTHREADS; i++) {
-        threads.push_back(std::thread(calculateRows, mat1, mat2, resmat, i*((*mat2)[0].size()/MAXTHREADS), (*mat2)[0].size()/MAXTHREADS));
+        threads.push_back(std::thread(calculateRows, mat1, mat2, resmat, i*(resmat->ylen/MAXTHREADS), resmat->ylen/MAXTHREADS));
       }
     }
   }
@@ -207,6 +222,7 @@ int main(int argc, char** argv) {
     configure();
   }
 
+  // Load configuration
   loadConfig(mat1file, mat2file);
 
   // Two input vectors
@@ -218,21 +234,23 @@ int main(int argc, char** argv) {
   fillMatrixFromFile(mat2, mat2file);
 
   // Get the result
-  int** result = multiplyMatrixes(&mat1, &mat2);
+  ResultMatrix* result = multiplyMatrixes(&mat1, &mat2);
 
   // Write result to a file
   std::ofstream out("outputmatrix.txt");
-  for (int i=0; i<mat1.size(); i++) {
-    for (int j=0; j<mat2[0].size(); j++) {
-      out << result[i][j];
-      if (j != mat2[0].size()-1) {
+  for (int i=0; i<result->xlen; i++) {
+    for (int j=0; j<result->ylen; j++) {
+      out << result->matrix[i][j];
+      if (j != result->ylen-1) {
         out << ",";
       }
     }
-    if (i != mat1.size()-1) {
+    if (i != result->xlen-1) {
         out << "\n";
       }
   }
+
+  free(result);
 
   return 0;
 }
